@@ -1,65 +1,64 @@
-import { useEffect, useState } from "react";
-import Dashboard from "./pages/Dashboard"; // Admin
-import LoginPage from "./pages/LoginPage"; // Login
-import UserDash from "./user/UserDash";    // User
-import { getDoc, doc } from "firebase/firestore";
-import { db } from "./firebaseConfig";
-import { BrowserRouter, Routes, Route, Navigate, useNavigate } from "react-router-dom";
-import ResumeUploader from "./user/components/ResumeUploader";
-import Assessment from "./pages/Assessment"; // Add this page
-import LearningPathTable from "./user/components/LearningPathTable";
+import React from 'react';
+import { BrowserRouter as Router, Routes, Route, Navigate, useNavigate } from 'react-router-dom';
+import { AuthProvider, useAuth } from './contexts/AuthContext';
+import LoginPage from './pages/LoginPage';
+import SignUpPage from './pages/SignUpPage';
+import Dashboard from './pages/Dashboard';
+import UserDash from './user/UserDash';
+import Assessment from './pages/Assessment';
+import LearningPath from './pages/LearningPath';
+import AIMentor from './components/AIMentor';
+import HackathonPanel from './components/HackathonPanel';
+import './styles.css';
 
-function AppWrapper() {
-  const [user, setUser] = useState(null);
-  const [initialRoute, setInitialRoute] = useState("/resume");
+function AppRoutes() {
+  const { user, loading } = useAuth();
+  const isAdmin = user && user.email === 'mavadmin@gmail.com';
 
-  useEffect(() => {
-    const checkProgress = async () => {
-      const storedUser = JSON.parse(localStorage.getItem("user"));
-      if (storedUser) {
-        setUser(storedUser);
-
-        const snap = await getDoc(doc(db, "userProgress", storedUser.uid));
-        if (snap.exists()) {
-          const progress = snap.data();
-          if (progress.modules?.length > 0) {
-            setInitialRoute("/learning");
-          } else if (progress.scores) {
-            setInitialRoute("/recommend");
-          } else if (progress.skills?.length > 0) {
-            setInitialRoute("/assessment");
-          }
-        }
-      }
-    };
-    checkProgress();
-  }, []);
+  if (loading) return <div>Loading...</div>;
 
   if (!user) {
-    return <LoginPage onLogin={(loggedInUser) => {
-      setUser(loggedInUser);
-      localStorage.setItem("user", JSON.stringify(loggedInUser));
-    }} />;
+    return (
+      <Routes>
+        <Route path="/login" element={<LoginPage />} />
+        <Route path="/signup" element={<SignUpPage />} />
+        <Route path="*" element={<Navigate to="/login" replace />} />
+      </Routes>
+    );
   }
 
-  const isAdmin = user.email === "mavadmin@gmail.com";
-
   return (
-    <BrowserRouter>
-      <Routes>
-        {isAdmin ? (
-          <Route path="/*" element={<Dashboard />} />
-        ) : (
-          <>
-            <Route path="/resume" element={<ResumeUploader />} />
-            <Route path="/assessment" element={<Assessment />} />
-            <Route path="/learning" element={<LearningPathTable />} />
-            <Route path="/" element={<Navigate to={initialRoute} />} />
-          </>
-        )}
-      </Routes>
-    </BrowserRouter>
+    <Routes>
+      {isAdmin ? (
+        <>
+          <Route path="/dashboard" element={<Dashboard />} />
+          <Route path="*" element={<Navigate to="/dashboard" replace />} />
+        </>
+      ) : (
+        <>
+          <Route path="/user-dashboard" element={<UserDash />} />
+          <Route path="/assessment" element={<Assessment />} />
+          <Route path="/learning-path" element={<LearningPath />} />
+          <Route path="/hackathons" element={<HackathonPanel />} />
+          <Route path="*" element={<Navigate to="/user-dashboard" replace />} />
+        </>
+      )}
+    </Routes>
   );
 }
 
-export default AppWrapper;
+function App() {
+  return (
+    <AuthProvider>
+      <Router>
+        <div className="App">
+          <AppRoutes />
+          {/* Global AI Mentor - Available on all pages */}
+          <AIMentor />
+        </div>
+      </Router>
+    </AuthProvider>
+  );
+}
+
+export default App;

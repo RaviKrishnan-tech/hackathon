@@ -1,0 +1,47 @@
+JOHN DOE
+Software Developer
+john.doe@email.com | (555) 123-4567 | linkedin.com/in/johndoe
+
+PROFESSIONAL SUMMARY
+Experienced software developer with 3+ years of experience in web development, proficient in JavaScript, React, and Node.js. Skilled in building responsive web applications and working with modern development tools.
+
+TECHNICAL SKILLS
+Programming Languages: JavaScript, Python, HTML, CSS
+Frameworks & Libraries: React, Node.js, Express, Bootstrap
+Databases: MongoDB, SQL, PostgreSQL
+Tools & Platforms: Git, GitHub, Docker, AWS
+Other: REST APIs, Agile methodologies, CI/CD
+
+WORK EXPERIENCE
+Software Developer | Tech Company Inc. | 2021 - Present
+• Developed and maintained web applications using React and Node.js
+• Worked with MongoDB and PostgreSQL databases
+• Implemented REST APIs for mobile applications
+• Used Git for version control and collaborated with team using GitHub
+• Deployed applications using Docker and AWS
+
+Junior Developer | Startup XYZ | 2020 - 2021
+• Built responsive websites using HTML, CSS, and JavaScript
+• Worked with Bootstrap for UI components
+• Assisted in database design and SQL queries
+• Participated in Agile development processes
+
+EDUCATION
+Bachelor of Science in Computer Science
+University of Technology | 2020
+
+PROJECTS
+E-commerce Platform
+• Built a full-stack e-commerce application using React, Node.js, and MongoDB
+• Implemented user authentication and payment processing
+• Deployed on AWS using Docker containers
+
+Task Management App
+• Created a React-based task management application
+• Used Express.js for backend API development
+• Integrated with PostgreSQL database
+
+CERTIFICATIONS
+• AWS Certified Developer Associate
+• MongoDB Certified Developer
+• React Developer Certification 

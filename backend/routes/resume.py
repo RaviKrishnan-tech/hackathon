@@ -26,11 +26,22 @@ async def upload_resume(file: UploadFile = File(...)):
         raise HTTPException(status_code=400, detail="Only PDF files are supported.")
 
     try:
+        print(f"📁 Processing resume: {file.filename}")
+        
         # Generate user ID for tracking
         user_id = str(uuid.uuid4())
+        print(f"🆔 Generated user ID: {user_id}")
         
         # Parse resume using enhanced AI parser
         resume_data = resume_parser.parse_resume(file.file)
+        print(f"📊 Resume parsing completed. Skills found: {len(resume_data.get('extracted_skills', []))}")
+        print(f"📋 Skills: {resume_data.get('extracted_skills', [])}")
+        
+        # Check if skills were found
+        if not resume_data.get("extracted_skills") or len(resume_data["extracted_skills"]) == 0:
+            print("⚠️ No skills found in resume, but continuing...")
+            print("🔍 Resume data structure:", resume_data.keys())
+            # Don't raise error, continue with empty skills array
         
         # Generate assessment plan based on extracted skills
         assessment_plan = resume_parser.generate_skill_assessment_plan(
@@ -46,7 +57,7 @@ async def upload_resume(file: UploadFile = File(...)):
             "years_of_experience": resume_data["years_of_experience"]
         })
         
-        return ResumeResponse(
+        response_data = ResumeResponse(
             user_id=user_id,
             extracted_skills=resume_data["extracted_skills"],
             experience_level=resume_data["experience_level"],
@@ -59,8 +70,12 @@ async def upload_resume(file: UploadFile = File(...)):
             recommended_learning_path=resume_data["recommended_learning_path"],
             assessment_plan=assessment_plan
         )
+        
+        print(f"✅ Resume processing successful. Returning {len(response_data.extracted_skills)} skills.")
+        return response_data
 
     except Exception as e:
+        print(f"❌ Resume processing failed: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to process file: {e}")
 
 @router.get("/{user_id}/analysis")

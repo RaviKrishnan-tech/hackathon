@@ -1,300 +1,168 @@
-from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
-from typing import Dict, List, Optional
+from typing import List, Dict, Optional
 from utils.ai_mentor import ai_mentor
 from utils.user_activity_tracker import activity_tracker
-from utils.skill_analyzer import skill_analyzer
-import json
 from datetime import datetime
 
 router = APIRouter(prefix="/mentor", tags=["AI Mentor"])
 
-class MentorMessage(BaseModel):
+class MentorQuestion(BaseModel):
     user_id: str
-    message: str
+    question: str
     context: Optional[Dict] = None
 
-class MentorSession(BaseModel):
+class LearningPathRequest(BaseModel):
     user_id: str
-    session_id: str
-    topic: str
-    start_time: str
-    messages: List[Dict]
+    skills: List[str]
+    skill_levels: Dict[str, str]
 
-@router.post("/chat")
-async def chat_with_mentor(payload: MentorMessage):
-    """Chat with AI mentor and get personalized guidance"""
+class DailyTipRequest(BaseModel):
+    user_id: str
+    current_skills: List[str]
+
+@router.post("/ask")
+async def ask_mentor(payload: MentorQuestion):
+    """Ask AI mentor a question"""
+    
+    print(f"🤖 AI Mentor: User {payload.user_id} asking question")
+    
     try:
-        # Get user context for personalized responses
-        user_profile = activity_tracker.get_user_profile(payload.user_id)
-        user_context = {}
-        
-        if "error" not in user_profile:
-            # Get recent assessment scores if available
-            assessment_activities = [
-                activity for activity in activity_tracker.get_user_activities(payload.user_id, 10)
-                if activity["activity_type"] == "assessment_completed"
-            ]
-            
-            if assessment_activities:
-                latest_assessment = assessment_activities[0]
-                if "scores" in latest_assessment["details"]:
-                    user_context["recent_assessment_scores"] = latest_assessment["details"]["scores"]
-            
-            # Add learning progress context
-            learning_progress = activity_tracker.learning_progress.get(payload.user_id, {})
-            if learning_progress:
-                user_context["current_learning_modules"] = list(learning_progress.keys())
-        
-        # Merge with provided context
-        if payload.context:
-            user_context.update(payload.context)
-        
-        # Get mentor response
-        mentor_response = ai_mentor.get_mentor_response(
-            payload.user_id,
-            payload.message,
-            user_context
+        response = await ai_mentor.get_mentor_response(
+            payload.user_id, 
+            payload.question, 
+            payload.context
         )
         
-        # Log mentor session
-        session_data = {
-            "message": payload.message,
-            "response": mentor_response["response"],
-            "context": user_context,
-            "suggestions": mentor_response.get("suggestions", [])
-        }
-        
-        activity_tracker.log_mentor_session(payload.user_id, session_data)
+        # Log the interaction
+        activity_tracker.log_activity(payload.user_id, "mentor_question", {
+            "question": payload.question,
+            "response_length": len(response.get("response", "")),
+            "confidence": response.get("confidence", "medium"),
+            "timestamp": datetime.utcnow().isoformat()
+        })
         
         return {
             "user_id": payload.user_id,
-            "mentor_response": mentor_response["response"],
-            "suggestions": mentor_response.get("suggestions", []),
-            "timestamp": mentor_response["timestamp"],
-            "context_used": user_context
-        }
-        
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to get mentor response: {e}")
-
-@router.get("/{user_id}/sessions")
-async def get_mentor_sessions(user_id: str, limit: int = 20):
-    """Get user's mentor session history"""
-    try:
-        sessions = activity_tracker.mentor_sessions.get(user_id, [])
-        return {
-            "user_id": user_id,
-            "sessions": sessions[-limit:],
-            "total_sessions": len(sessions),
+            "question": payload.question,
+            "mentor_response": response,
             "timestamp": datetime.utcnow().isoformat()
         }
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to get sessions: {e}")
-
-@router.get("/{user_id}/conversation-history")
-async def get_conversation_history(user_id: str, limit: int = 10):
-    """Get recent conversation history with AI mentor"""
-    try:
-        history = ai_mentor.get_conversation_history(user_id, limit)
-        return {
-            "user_id": user_id,
-            "conversation_history": history,
-            "timestamp": datetime.utcnow().isoformat()
-        }
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to get conversation history: {e}")
-
-@router.post("/{user_id}/learning-guidance")
-async def get_learning_guidance(user_id: str, skill_gaps: List[str]):
-    """Get personalized learning guidance for specific skill gaps"""
-    try:
-        # Get learning path suggestions
-        learning_path = ai_mentor.get_learning_path_suggestions(user_id, skill_gaps)
         
-        # Get additional mentor guidance
-        guidance_prompt = f"I need help improving these skills: {', '.join(skill_gaps)}. " \
-                         f"Please provide specific guidance on how to approach learning these skills effectively."
-        
-        mentor_guidance = ai_mentor.get_mentor_response(
-            user_id,
-            guidance_prompt,
-            {"skill_gaps": skill_gaps}
+    except Exception as e:
+        print(f"❌ Mentor error: {e}")
+        raise HTTPException(status_code=500, detail=f"Mentor service error: {e}")
+
+@router.post("/learning-path")
+async def generate_learning_path(payload: LearningPathRequest):
+    """Generate personalized learning path"""
+    
+    print(f"🎯 Generating learning path for user {payload.user_id}")
+    
+    try:
+        learning_path = await ai_mentor.generate_learning_path(
+            payload.user_id,
+            payload.skills,
+            payload.skill_levels
         )
         
+        # Log learning path generation
+        activity_tracker.log_activity(payload.user_id, "learning_path_generated", {
+            "skills": payload.skills,
+            "skill_levels": payload.skill_levels,
+            "path_length": len(learning_path.get("learning_path", [])),
+            "timestamp": datetime.utcnow().isoformat()
+        })
+        
         return {
-            "user_id": user_id,
-            "skill_gaps": skill_gaps,
+            "user_id": payload.user_id,
             "learning_path": learning_path,
-            "mentor_guidance": mentor_guidance["response"],
-            "suggestions": mentor_guidance.get("suggestions", []),
+            "generated_at": datetime.utcnow().isoformat()
+        }
+        
+    except Exception as e:
+        print(f"❌ Learning path error: {e}")
+        raise HTTPException(status_code=500, detail=f"Learning path generation error: {e}")
+
+@router.post("/daily-tip")
+async def get_daily_tip(payload: DailyTipRequest):
+    """Get daily learning tip"""
+    
+    print(f"💡 Getting daily tip for user {payload.user_id}")
+    
+    try:
+        tip = await ai_mentor.get_daily_tip(payload.user_id, payload.current_skills)
+        
+        # Log daily tip request
+        activity_tracker.log_activity(payload.user_id, "daily_tip_requested", {
+            "current_skills": payload.current_skills,
+            "tip_skill": tip.get("skill_focus", "general"),
             "timestamp": datetime.utcnow().isoformat()
-        }
-        
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to get learning guidance: {e}")
-
-@router.post("/{user_id}/code-review")
-async def get_code_review(user_id: str, code: str, language: str = "python"):
-    """Get AI mentor code review and suggestions"""
-    try:
-        review_prompt = f"Please review this {language} code and provide feedback:\n\n{code}\n\n" \
-                       f"Provide feedback on:\n1. Code quality and best practices\n" \
-                       f"2. Potential improvements\n3. Common pitfalls to avoid\n" \
-                       f"4. Alternative approaches"
-        
-        code_review = ai_mentor.get_mentor_response(
-            user_id,
-            review_prompt,
-            {"code_review": True, "language": language}
-        )
-        
-        # Log code review session
-        session_data = {
-            "type": "code_review",
-            "language": language,
-            "code_length": len(code),
-            "response": code_review["response"]
-        }
-        
-        activity_tracker.log_mentor_session(user_id, session_data)
+        })
         
         return {
-            "user_id": user_id,
-            "code_review": code_review["response"],
-            "suggestions": code_review.get("suggestions", []),
-            "language": language,
-            "timestamp": code_review["timestamp"]
+            "user_id": payload.user_id,
+            "daily_tip": tip,
+            "date": datetime.utcnow().strftime("%Y-%m-%d")
         }
         
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to get code review: {e}")
+        print(f"❌ Daily tip error: {e}")
+        raise HTTPException(status_code=500, detail=f"Daily tip error: {e}")
 
-@router.post("/{user_id}/debug-help")
-async def get_debug_help(user_id: str, error_message: str, code_context: str = ""):
-    """Get AI mentor help with debugging"""
+@router.get("/{user_id}/history")
+async def get_mentor_history(user_id: str, limit: int = 10):
+    """Get user's mentor interaction history"""
+    
     try:
-        debug_prompt = f"I'm getting this error: {error_message}\n\n" \
-                      f"Code context: {code_context}\n\n" \
-                      f"Please help me understand and fix this error."
-        
-        debug_help = ai_mentor.get_mentor_response(
-            user_id,
-            debug_prompt,
-            {"debug_help": True, "error": error_message}
-        )
-        
-        # Log debug session
-        session_data = {
-            "type": "debug_help",
-            "error_message": error_message,
-            "response": debug_help["response"]
-        }
-        
-        activity_tracker.log_mentor_session(user_id, session_data)
-        
-        return {
-            "user_id": user_id,
-            "debug_help": debug_help["response"],
-            "suggestions": debug_help.get("suggestions", []),
-            "error_message": error_message,
-            "timestamp": debug_help["timestamp"]
-        }
-        
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to get debug help: {e}")
-
-@router.get("/{user_id}/recommendations")
-async def get_personalized_recommendations(user_id: str):
-    """Get personalized learning and career recommendations"""
-    try:
-        # Get user's skill analysis
-        user_profile = activity_tracker.get_user_profile(user_id)
-        if "error" in user_profile:
-            raise HTTPException(status_code=404, detail="User not found")
-        
-        # Get recent assessment data
-        assessment_activities = [
-            activity for activity in activity_tracker.get_user_activities(user_id, 5)
-            if activity["activity_type"] == "assessment_completed"
+        activities = activity_tracker.get_user_activities(user_id, limit)
+        mentor_activities = [
+            activity for activity in activities 
+            if activity.get("activity_type") in ["mentor_question", "learning_path_generated", "daily_tip_requested"]
         ]
         
-        recommendations = {
+        return {
             "user_id": user_id,
-            "learning_recommendations": [],
-            "career_recommendations": [],
-            "skill_development_plan": [],
+            "mentor_history": mentor_activities,
+            "total_interactions": len(mentor_activities)
+        }
+        
+    except Exception as e:
+        print(f"❌ Mentor history error: {e}")
+        raise HTTPException(status_code=500, detail=f"Mentor history error: {e}")
+
+@router.get("/stats")
+async def get_mentor_stats():
+    """Get overall mentor usage statistics"""
+    
+    try:
+        # Get all mentor-related activities
+        all_activities = activity_tracker.get_all_activities()
+        mentor_activities = [
+            activity for activity in all_activities 
+            if activity.get("activity_type") in ["mentor_question", "learning_path_generated", "daily_tip_requested"]
+        ]
+        
+        # Calculate statistics
+        total_interactions = len(mentor_activities)
+        unique_users = len(set(activity.get("user_id") for activity in mentor_activities))
+        
+        # Count by type
+        question_count = len([a for a in mentor_activities if a.get("activity_type") == "mentor_question"])
+        learning_path_count = len([a for a in mentor_activities if a.get("activity_type") == "learning_path_generated"])
+        tip_count = len([a for a in mentor_activities if a.get("activity_type") == "daily_tip_requested"])
+        
+        return {
+            "total_interactions": total_interactions,
+            "unique_users": unique_users,
+            "questions_asked": question_count,
+            "learning_paths_generated": learning_path_count,
+            "daily_tips_requested": tip_count,
+            "average_confidence": "medium",  # This would be calculated from actual data
+            "most_active_hours": "9 AM - 6 PM",  # This would be calculated from timestamps
             "timestamp": datetime.utcnow().isoformat()
         }
         
-        if assessment_activities:
-            latest_assessment = assessment_activities[0]
-            if "scores" in latest_assessment["details"]:
-                scores = latest_assessment["details"]["scores"]
-                skill_analysis = skill_analyzer.analyze_skill_strengths(scores)
-                
-                # Generate recommendations based on skill analysis
-                recommendations_prompt = f"Based on these assessment scores: {scores}, " \
-                                       f"provide specific recommendations for:\n" \
-                                       f"1. Learning priorities\n" \
-                                       f"2. Career development\n" \
-                                       f"3. Skill improvement strategies"
-                
-                ai_recommendations = ai_mentor.get_mentor_response(
-                    user_id,
-                    recommendations_prompt,
-                    {"assessment_scores": scores, "skill_analysis": skill_analysis}
-                )
-                
-                recommendations["ai_recommendations"] = ai_recommendations["response"]
-                recommendations["skill_analysis"] = skill_analysis
-        
-        return recommendations
-        
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to get recommendations: {e}")
-
-# WebSocket endpoint for real-time chat
-class ConnectionManager:
-    def __init__(self):
-        self.active_connections: List[WebSocket] = []
-
-    async def connect(self, websocket: WebSocket):
-        await websocket.accept()
-        self.active_connections.append(websocket)
-
-    def disconnect(self, websocket: WebSocket):
-        self.active_connections.remove(websocket)
-
-    async def send_personal_message(self, message: str, websocket: WebSocket):
-        await websocket.send_text(message)
-
-manager = ConnectionManager()
-
-@router.websocket("/ws/{user_id}")
-async def websocket_endpoint(websocket: WebSocket, user_id: str):
-    await manager.connect(websocket)
-    try:
-        while True:
-            data = await websocket.receive_text()
-            message_data = json.loads(data)
-            
-            # Get mentor response
-            mentor_response = ai_mentor.get_mentor_response(
-                user_id,
-                message_data["message"],
-                message_data.get("context")
-            )
-            
-            # Send response back
-            response_data = {
-                "type": "mentor_response",
-                "response": mentor_response["response"],
-                "suggestions": mentor_response.get("suggestions", []),
-                "timestamp": mentor_response["timestamp"]
-            }
-            
-            await manager.send_personal_message(json.dumps(response_data), websocket)
-            
-    except WebSocketDisconnect:
-        manager.disconnect(websocket) 
+        print(f"❌ Mentor stats error: {e}")
+        raise HTTPException(status_code=500, detail=f"Mentor stats error: {e}") 

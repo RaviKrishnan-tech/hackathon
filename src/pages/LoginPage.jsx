@@ -1,5 +1,6 @@
 // src/pages/LoginPage.jsx
 import { useState } from "react";
+import { useNavigate } from "react-router-dom";
 import {
   signInWithEmailAndPassword,
   createUserWithEmailAndPassword,
@@ -7,13 +8,16 @@ import {
 import { auth } from "../firebaseConfig";
 import { getDoc, doc } from "firebase/firestore";
 import { db } from "../firebaseConfig";
+import { useAuth } from "../contexts/AuthContext";
 import "../styles.css";
 
-export default function LoginPage({ onLogin }) {
+export default function LoginPage() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [isSignUp, setIsSignUp] = useState(false);
+  const { login } = useAuth();
+  const navigate = useNavigate();
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -35,7 +39,13 @@ export default function LoginPage({ onLogin }) {
         );
         console.log("Logged in:", userCredential.user);
       }
-      onLogin(userCredential.user);
+      login(userCredential.user);
+      // Redirect based on email
+      if (userCredential.user.email === "mavadmin@gmail.com") {
+        navigate("/dashboard", { replace: true });
+      } else {
+        navigate("/user-dashboard", { replace: true });
+      }
     } catch (err) {
       console.error("Auth Error:", err);
       if (err.code === "auth/email-already-in-use") {

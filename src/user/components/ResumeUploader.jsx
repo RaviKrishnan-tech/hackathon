@@ -41,11 +41,11 @@ export default function ResumeUploader() {
       }
 
       const data = await res.json();
-      const skills = data.technical_skills;
+      const skills = data.extracted_skills; // Changed from technical_skills to extracted_skills
 
       if (!skills || skills.length === 0) {
-        alert("⚠️ No technical skills found. Please upload a better resume.");
-        return;
+        console.log("No skills found, but continuing with empty skills array");
+        // Continue with empty skills array instead of showing error
       }
 
       // Save skills to Firebase

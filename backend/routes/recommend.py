@@ -1,263 +1,456 @@
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
-from typing import Dict, List
-import uuid
-from utils.skill_analyzer import skill_analyzer
+from typing import List, Dict, Optional
+from datetime import datetime
 from utils.ai_mentor import ai_mentor
 from utils.user_activity_tracker import activity_tracker
-import google.generativeai as genai
-import os
-from dotenv import load_dotenv
 import json
 
-load_dotenv()
-genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
+router = APIRouter(prefix="/recommend", tags=["Learning Recommendations"])
 
-router = APIRouter(prefix="/recommend", tags=["Recommendation"])
-
-class RecommendRequest(BaseModel):
+class LearningPathRequest(BaseModel):
     user_id: str
-    scores: Dict[str, float]
-    learning_goals: List[str] = []
-    preferred_learning_style: str = "mixed"  # visual, audio, text, mixed
+    skills: List[str]
+    skill_levels: Dict[str, str]
+    goals: List[str]
+    time_available: str  # "1-2 hours", "3-5 hours", "5+ hours"
+    preferred_format: List[str]  # ["video", "text", "interactive", "project"]
 
-class LearningModule(BaseModel):
-    id: str
-    title: str
+class ModuleCompletion(BaseModel):
+    user_id: str
+    module_id: str
     skill: str
-    level: str
-    estimated_hours: int
-    learning_objectives: List[str]
-    resources: List[str]
-    exercises: List[str]
-    milestones: List[str]
-    difficulty: str
-    prerequisites: List[str]
+    completion_percentage: float
+    time_spent: int  # in minutes
+    feedback: Optional[str] = None
 
-class LearningPathResponse(BaseModel):
-    user_id: str
-    learning_path: List[LearningModule]
-    total_estimated_weeks: int
-    focus_areas: List[str]
-    success_metrics: List[str]
-    ai_mentor_guidance: Dict
-
-@router.post("/learning-path", response_model=LearningPathResponse)
-async def generate_learning_path(payload: RecommendRequest):
-    """Generate AI-powered personalized learning path"""
+@router.post("/learning-path")
+async def generate_learning_path(payload: LearningPathRequest):
+    """Generate personalized learning path using AI"""
     
-    if not payload.scores:
-        raise HTTPException(status_code=400, detail="Assessment scores are required")
+    print(f"🎯 Generating learning path for user {payload.user_id}")
+    print(f"📋 Skills: {payload.skills}")
+    print(f"🎯 Goals: {payload.goals}")
     
     try:
-        # Analyze skills to identify gaps
-        skill_analysis = skill_analyzer.analyze_skill_strengths(payload.scores)
-        
-        # Generate learning path using AI
-        learning_path_data = skill_analyzer.generate_personalized_learning_path(skill_analysis)
-        
-        # Enhance learning path with AI mentor guidance
-        mentor_guidance = ai_mentor.get_mentor_response(
+        # Generate learning path using AI mentor
+        learning_path = await ai_mentor.generate_learning_path(
             payload.user_id,
-            f"Generate a detailed learning strategy for skills: {skill_analysis['weak_skills']}. "
-            f"Learning goals: {payload.learning_goals}. "
-            f"Preferred style: {payload.preferred_learning_style}",
-            {
-                "recent_assessment_scores": payload.scores,
-                "weak_skills": skill_analysis["weak_skills"],
-                "learning_goals": payload.learning_goals,
-                "learning_style": payload.preferred_learning_style
-            }
+            payload.skills,
+            payload.skill_levels
         )
         
-        # Convert to structured learning modules
-        learning_modules = []
-        for module_data in learning_path_data.get("learning_path", []):
-            learning_modules.append(LearningModule(
-                id=str(uuid.uuid4()),
-                title=module_data.get("skill", "Unknown Skill"),
-                skill=module_data.get("skill", "Unknown"),
-                level=module_data.get("priority", "medium"),
-                estimated_hours=module_data.get("estimated_weeks", 4) * 10,  # Convert weeks to hours
-                learning_objectives=module_data.get("learning_objectives", []),
-                resources=module_data.get("resources", []),
-                exercises=module_data.get("exercises", []),
-                milestones=module_data.get("milestones", []),
-                difficulty=module_data.get("difficulty", "intermediate"),
-                prerequisites=[]
-            ))
+        # Enhance with user preferences
+        enhanced_path = enhance_learning_path(learning_path, payload)
         
         # Log learning path generation
         activity_tracker.log_activity(payload.user_id, "learning_path_generated", {
-            "skills_targeted": skill_analysis["weak_skills"],
-            "total_modules": len(learning_modules),
-            "estimated_weeks": learning_path_data.get("total_estimated_weeks", 0)
+            "skills": payload.skills,
+            "skill_levels": payload.skill_levels,
+            "goals": payload.goals,
+            "time_available": payload.time_available,
+            "preferred_format": payload.preferred_format,
+            "path_length": len(enhanced_path.get("learning_path", [])),
+            "timestamp": datetime.utcnow().isoformat()
         })
-        
-        return LearningPathResponse(
-            user_id=payload.user_id,
-            learning_path=learning_modules,
-            total_estimated_weeks=learning_path_data.get("total_estimated_weeks", 0),
-            focus_areas=learning_path_data.get("focus_areas", []),
-            success_metrics=learning_path_data.get("success_metrics", []),
-            ai_mentor_guidance=mentor_guidance
-        )
-        
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to generate learning path: {e}")
-
-@router.post("/modules")
-async def generate_learning_modules(payload: RecommendRequest):
-    """Generate detailed learning modules for specific skills"""
-    
-    if not payload.scores:
-        raise HTTPException(status_code=400, detail="Assessment scores are required")
-    
-    try:
-        model = genai.GenerativeModel("gemini-pro")
-        
-        # Identify weak skills that need improvement
-        skill_analysis = skill_analyzer.analyze_skill_strengths(payload.scores)
-        weak_skills = skill_analysis["weak_skills"]
-        
-        if not weak_skills:
-            return {"modules": [], "message": "No skills identified for improvement"}
-        
-        modules = []
-        
-        for skill in weak_skills[:5]:  # Limit to top 5 skills
-            try:
-                prompt = f"""Create a comprehensive learning module for '{skill}' with the following structure:
-
-{{
-    "skill": "{skill}",
-    "title": "Comprehensive {skill} Learning Module",
-    "description": "Detailed description of what will be learned",
-    "difficulty": "beginner/intermediate/advanced",
-    "estimated_hours": 20,
-    "prerequisites": ["prerequisite1", "prerequisite2"],
-    "learning_objectives": [
-        "objective1",
-        "objective2",
-        "objective3"
-    ],
-    "curriculum": [
-        {{
-            "week": 1,
-            "topics": ["topic1", "topic2"],
-            "resources": [
-                {{
-                    "type": "video/article/book/exercise",
-                    "title": "Resource Title",
-                    "url": "https://example.com/resource",
-                    "description": "Brief description"
-                }}
-            ],
-            "exercises": [
-                {{
-                    "title": "Exercise Title",
-                    "description": "Exercise description",
-                    "difficulty": "easy/medium/hard",
-                    "estimated_time": "30 minutes"
-                }}
-            ]
-        }}
-    ],
-    "assessment": [
-        {{
-            "type": "quiz/project/code_review",
-            "title": "Assessment Title",
-            "description": "Assessment description",
-            "criteria": ["criterion1", "criterion2"]
-        }}
-    ],
-    "real_world_applications": [
-        "application1",
-        "application2"
-    ],
-    "career_opportunities": [
-        "opportunity1",
-        "opportunity2"
-    ]
-}}
-
-Focus on practical, hands-on learning with real-world applications.
-"""
-                
-                response = model.generate_content(prompt)
-                response_text = response.text
-                
-                # Extract JSON from response
-                if "```json" in response_text:
-                    json_start = response_text.find("```json") + 7
-                    json_end = response_text.find("```", json_start)
-                    json_str = response_text[json_start:json_end].strip()
-                    module_data = json.loads(json_str)
-                else:
-                    module_data = json.loads(response_text)
-                
-                module_data["id"] = str(uuid.uuid4())
-                modules.append(module_data)
-                
-            except Exception as e:
-                print(f"Failed to generate module for {skill}: {e}")
-                continue
-        
-        # Log module generation
-        activity_tracker.log_activity(payload.user_id, "learning_modules_generated", {
-            "skills": [m["skill"] for m in modules],
-            "modules_count": len(modules)
-        })
-        
-        return {"modules": modules}
-        
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to generate modules: {e}")
-
-@router.get("/{user_id}/progress")
-async def get_learning_progress(user_id: str):
-    """Get user's learning progress"""
-    try:
-        user_profile = activity_tracker.get_user_profile(user_id)
-        if "error" in user_profile:
-            raise HTTPException(status_code=404, detail="User not found")
-        
-        # Get learning-related activities
-        learning_activities = [
-            activity for activity in activity_tracker.get_user_activities(user_id, 50)
-            if activity["activity_type"] in ["learning_path_generated", "learning_modules_generated", "learning_progress"]
-        ]
         
         return {
-            "user_id": user_id,
-            "learning_activities": learning_activities,
-            "modules_completed": user_profile.get("learning_modules_completed", 0),
-            "current_learning_path": user_profile.get("current_learning_path"),
-            "profile": user_profile
+            "user_id": payload.user_id,
+            "learning_path": enhanced_path,
+            "generated_at": datetime.utcnow().isoformat(),
+            "estimated_completion": enhanced_path.get("overall_timeline", "Unknown")
         }
         
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to get progress: {e}")
+        print(f"❌ Learning path generation error: {e}")
+        raise HTTPException(status_code=500, detail=f"Learning path generation error: {e}")
 
-@router.post("/{user_id}/complete-module")
-async def complete_learning_module(user_id: str, module_id: str, completion_data: Dict):
-    """Mark a learning module as completed"""
+def enhance_learning_path(learning_path: Dict, user_preferences: LearningPathRequest) -> Dict:
+    """Enhance learning path with user preferences and additional details"""
+    
+    enhanced_modules = []
+    
+    for skill_path in learning_path.get("learning_path", []):
+        skill = skill_path.get("skill", "")
+        modules = skill_path.get("modules", [])
+        
+        enhanced_skill_modules = []
+        for module in modules:
+            enhanced_module = {
+                **module,
+                "module_id": f"{skill}_{len(enhanced_skill_modules)}",
+                "difficulty": determine_difficulty(skill_path.get("current_level", "beginner")),
+                "estimated_time": adjust_time_for_preferences(module.get("duration", "1 week"), user_preferences.time_available),
+                "resources": filter_resources_by_preferences(module.get("resources", []), user_preferences.preferred_format),
+                "prerequisites": get_prerequisites(skill, skill_path.get("current_level", "beginner")),
+                "learning_objectives": generate_learning_objectives(skill, module.get("title", "")),
+                "assessment_criteria": generate_assessment_criteria(skill, module.get("title", "")),
+                "completion_status": "not_started"
+            }
+            enhanced_skill_modules.append(enhanced_module)
+        
+        enhanced_skill_path = {
+            **skill_path,
+            "modules": enhanced_skill_modules,
+            "priority": calculate_priority(skill, user_preferences.goals),
+            "estimated_skill_gain": calculate_skill_gain(skill_path.get("current_level", "beginner"))
+        }
+        enhanced_modules.append(enhanced_skill_path)
+    
+    return {
+        **learning_path,
+        "learning_path": enhanced_modules,
+        "user_preferences": {
+            "time_available": user_preferences.time_available,
+            "preferred_format": user_preferences.preferred_format,
+            "goals": user_preferences.goals
+        },
+        "adaptive_features": {
+            "difficulty_adjustment": True,
+            "pace_adjustment": True,
+            "content_personalization": True
+        }
+    }
+
+def determine_difficulty(current_level: str) -> str:
+    """Determine module difficulty based on current skill level"""
+    
+    difficulty_mapping = {
+        "beginner": "beginner",
+        "intermediate": "intermediate", 
+        "advanced": "advanced"
+    }
+    
+    return difficulty_mapping.get(current_level, "intermediate")
+
+def adjust_time_for_preferences(base_time: str, time_available: str) -> str:
+    """Adjust estimated time based on user's available time"""
+    
+    # Parse base time
+    if "week" in base_time:
+        base_hours = 7 * 24  # Assume 7 days
+    elif "day" in base_time:
+        base_hours = 24
+    elif "hour" in base_time:
+        base_hours = 1
+    else:
+        base_hours = 5  # Default
+    
+    # Adjust based on user preference
+    if time_available == "1-2 hours":
+        adjusted_hours = min(base_hours, 2)
+    elif time_available == "3-5 hours":
+        adjusted_hours = min(base_hours, 5)
+    else:  # 5+ hours
+        adjusted_hours = base_hours
+    
+    if adjusted_hours < 1:
+        return f"{int(adjusted_hours * 60)} minutes"
+    elif adjusted_hours < 24:
+        return f"{int(adjusted_hours)} hours"
+    else:
+        days = adjusted_hours / 24
+        return f"{int(days)} days"
+
+def filter_resources_by_preferences(resources: List[str], preferred_format: List[str]) -> List[str]:
+    """Filter resources based on user's preferred format"""
+    
+    # Map resource types to formats
+    resource_format_mapping = {
+        "video": ["YouTube", "Udemy", "Coursera", "video", "tutorial"],
+        "text": ["documentation", "book", "article", "blog", "text"],
+        "interactive": ["Codecademy", "interactive", "practice", "exercise"],
+        "project": ["GitHub", "project", "build", "create"]
+    }
+    
+    filtered_resources = []
+    
+    for resource in resources:
+        resource_lower = resource.lower()
+        for format_type in preferred_format:
+            if format_type in resource_format_mapping:
+                format_keywords = resource_format_mapping[format_type]
+                if any(keyword in resource_lower for keyword in format_keywords):
+                    filtered_resources.append(resource)
+                    break
+    
+    # If no resources match preferences, return original list
+    return filtered_resources if filtered_resources else resources
+
+def get_prerequisites(skill: str, current_level: str) -> List[str]:
+    """Get prerequisites for a skill/module"""
+    
+    prerequisites = {
+        "python": {
+            "beginner": ["basic computer skills"],
+            "intermediate": ["python basics", "programming fundamentals"],
+            "advanced": ["python intermediate", "data structures", "algorithms"]
+        },
+        "javascript": {
+            "beginner": ["basic computer skills"],
+            "intermediate": ["javascript basics", "HTML/CSS"],
+            "advanced": ["javascript intermediate", "DOM manipulation", "async programming"]
+        },
+        "react": {
+            "beginner": ["javascript basics", "HTML/CSS"],
+            "intermediate": ["react basics", "component lifecycle"],
+            "advanced": ["react intermediate", "state management", "hooks"]
+        },
+        "sql": {
+            "beginner": ["basic computer skills"],
+            "intermediate": ["sql basics", "database concepts"],
+            "advanced": ["sql intermediate", "database design", "optimization"]
+        }
+    }
+    
+    return prerequisites.get(skill, {}).get(current_level, [])
+
+def generate_learning_objectives(skill: str, module_title: str) -> List[str]:
+    """Generate learning objectives for a module"""
+    
+    objectives = {
+        "python": [
+            "Understand Python syntax and basic concepts",
+            "Write simple Python programs",
+            "Use Python data structures effectively",
+            "Implement basic algorithms in Python"
+        ],
+        "javascript": [
+            "Master JavaScript fundamentals",
+            "Understand DOM manipulation",
+            "Work with asynchronous programming",
+            "Build interactive web applications"
+        ],
+        "react": [
+            "Understand React component architecture",
+            "Manage component state and props",
+            "Implement React hooks effectively",
+            "Build scalable React applications"
+        ],
+        "sql": [
+            "Write basic SQL queries",
+            "Understand database relationships",
+            "Optimize database performance",
+            "Design efficient database schemas"
+        ]
+    }
+    
+    return objectives.get(skill, [
+        f"Master {skill} fundamentals",
+        f"Apply {skill} in practical scenarios",
+        f"Build projects using {skill}",
+        f"Understand advanced {skill} concepts"
+    ])
+
+def generate_assessment_criteria(skill: str, module_title: str) -> List[str]:
+    """Generate assessment criteria for a module"""
+    
+    return [
+        "Complete all module exercises",
+        "Build a practical project",
+        "Pass the module assessment",
+        "Demonstrate understanding through code review"
+    ]
+
+def calculate_priority(skill: str, goals: List[str]) -> str:
+    """Calculate priority of a skill based on user goals"""
+    
+    # Simple priority calculation based on goal alignment
+    goal_keywords = " ".join(goals).lower()
+    skill_lower = skill.lower()
+    
+    if skill_lower in goal_keywords:
+        return "high"
+    elif any(keyword in goal_keywords for keyword in ["web", "frontend", "backend"]) and skill in ["javascript", "react", "python"]:
+        return "medium"
+                else:
+        return "low"
+
+def calculate_skill_gain(current_level: str) -> str:
+    """Calculate expected skill gain from completing the path"""
+    
+    skill_gains = {
+        "beginner": "Beginner to Intermediate",
+        "intermediate": "Intermediate to Advanced", 
+        "advanced": "Advanced to Expert"
+    }
+    
+    return skill_gains.get(current_level, "Skill improvement")
+
+@router.post("/module/complete")
+async def complete_module(payload: ModuleCompletion):
+    """Mark a module as completed"""
+    
+    print(f"✅ User {payload.user_id} completed module {payload.module_id}")
+    
     try:
         # Log module completion
-        activity_tracker.log_activity(user_id, "learning_module_completed", {
-            "module_id": module_id,
-            "completion_data": completion_data
+        activity_tracker.log_activity(payload.user_id, "module_completed", {
+            "module_id": payload.module_id,
+            "skill": payload.skill,
+            "completion_percentage": payload.completion_percentage,
+            "time_spent": payload.time_spent,
+            "feedback": payload.feedback,
+            "timestamp": datetime.utcnow().isoformat()
         })
         
+        # Check if this completes a skill path
+        await check_skill_completion(payload.user_id, payload.skill)
+        
         return {
-            "user_id": user_id,
-            "module_id": module_id,
-            "status": "completed",
+            "message": "Module completed successfully",
+            "module_id": payload.module_id,
+            "completion_percentage": payload.completion_percentage,
             "timestamp": datetime.utcnow().isoformat()
         }
         
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to complete module: {e}")
+        print(f"❌ Module completion error: {e}")
+        raise HTTPException(status_code=500, detail=f"Module completion error: {e}")
 
-# Import datetime for the last function
-from datetime import datetime
+async def check_skill_completion(user_id: str, skill: str):
+    """Check if user has completed a skill path"""
+    
+    try:
+        # Get user's module completions for this skill
+        user_activities = activity_tracker.get_user_activities(user_id, 1000)
+        skill_modules = [
+            a for a in user_activities 
+            if a.get("activity_type") == "module_completed" and 
+            a.get("activity_data", {}).get("skill") == skill
+        ]
+        
+        # Check if all modules for this skill are completed
+        # This is a simplified check - in a real app, you'd have a proper module tracking system
+        
+        if len(skill_modules) >= 3:  # Assume 3 modules per skill
+            # Log skill completion
+            activity_tracker.log_activity(user_id, "skill_completed", {
+                "skill": skill,
+                "modules_completed": len(skill_modules),
+                "timestamp": datetime.utcnow().isoformat()
+            })
+            
+            print(f"🎉 User {user_id} completed skill: {skill}")
+        
+    except Exception as e:
+        print(f"❌ Skill completion check error: {e}")
+
+@router.get("/{user_id}/recommendations")
+async def get_personalized_recommendations(user_id: str):
+    """Get personalized learning recommendations"""
+    
+    try:
+        # Get user's current skills and progress
+        user_activities = activity_tracker.get_user_activities(user_id, 100)
+        
+        # Extract current skills
+        current_skills = extract_current_skills(user_activities)
+        
+        # Get skill levels
+        skill_levels = assess_skill_levels(user_activities)
+        
+        # Generate recommendations
+        recommendations = generate_recommendations(current_skills, skill_levels, user_activities)
+        
+        return {
+            "user_id": user_id,
+            "current_skills": current_skills,
+            "skill_levels": skill_levels,
+            "recommendations": recommendations,
+            "generated_at": datetime.utcnow().isoformat()
+        }
+        
+    except Exception as e:
+        print(f"❌ Recommendations error: {e}")
+        raise HTTPException(status_code=500, detail=f"Recommendations error: {e}")
+
+def extract_current_skills(activities: List[Dict]) -> List[str]:
+    """Extract current skills from user activities"""
+    
+    skills = set()
+    
+    for activity in activities:
+        activity_data = activity.get("activity_data", {})
+        
+        if activity.get("activity_type") == "resume_upload":
+            skills.update(activity_data.get("skills", []))
+        
+        elif activity.get("activity_type") == "assessment_completed":
+            skill_scores = activity_data.get("skill_scores", {})
+            skills.update(skill_scores.keys())
+    
+    return list(skills)
+
+def assess_skill_levels(activities: List[Dict]) -> Dict[str, str]:
+    """Assess skill levels based on activities"""
+    
+    skill_levels = {}
+    
+    for activity in activities:
+        if activity.get("activity_type") == "assessment_completed":
+            skill_scores = activity.get("activity_data", {}).get("skill_scores", {})
+            
+            for skill, score in skill_scores.items():
+                if score >= 8.0:
+                    skill_levels[skill] = "advanced"
+                elif score >= 5.0:
+                    skill_levels[skill] = "intermediate"
+                else:
+                    skill_levels[skill] = "beginner"
+    
+    return skill_levels
+
+def generate_recommendations(current_skills: List[str], skill_levels: Dict[str, str], activities: List[Dict]) -> Dict:
+    """Generate personalized recommendations"""
+    
+    recommendations = {
+        "next_skills": [],
+        "improvement_areas": [],
+        "project_suggestions": [],
+        "resource_recommendations": []
+    }
+    
+    # Suggest next skills based on current skills
+    skill_ecosystem = {
+        "python": ["django", "flask", "data science", "machine learning"],
+        "javascript": ["react", "node.js", "typescript", "vue"],
+        "react": ["redux", "next.js", "graphql", "testing"],
+        "sql": ["database design", "optimization", "nosql", "data engineering"]
+    }
+    
+    for skill in current_skills:
+        if skill in skill_ecosystem:
+            recommendations["next_skills"].extend(skill_ecosystem[skill])
+    
+    # Remove duplicates
+    recommendations["next_skills"] = list(set(recommendations["next_skills"]))
+    
+    # Identify improvement areas
+    for skill, level in skill_levels.items():
+        if level == "beginner":
+            recommendations["improvement_areas"].append(f"Advance {skill} to intermediate level")
+        elif level == "intermediate":
+            recommendations["improvement_areas"].append(f"Master {skill} at advanced level")
+    
+    # Suggest projects
+    for skill in current_skills:
+        if skill == "python":
+            recommendations["project_suggestions"].append("Build a web scraper")
+            recommendations["project_suggestions"].append("Create a REST API")
+        elif skill == "javascript":
+            recommendations["project_suggestions"].append("Build a todo app")
+            recommendations["project_suggestions"].append("Create a weather app")
+        elif skill == "react":
+            recommendations["project_suggestions"].append("Build a portfolio website")
+            recommendations["project_suggestions"].append("Create a social media clone")
+    
+    # Recommend resources
+    recommendations["resource_recommendations"] = [
+        "Practice on LeetCode/HackerRank",
+        "Build projects for your portfolio",
+        "Join coding communities",
+        "Follow tech blogs and tutorials"
+    ]
+    
+    return recommendations

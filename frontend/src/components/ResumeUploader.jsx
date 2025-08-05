@@ -51,8 +51,8 @@ export default function ResumeUploader() {
       const data = await response.json();
       console.log("Resume API response:", data);
       if (!data.extracted_skills || data.extracted_skills.length === 0) {
-        setError("No technical skills found in the resume. Please upload a resume with more technical content.");
-        return;
+        // Continue with empty skills - don't show error
+        console.log("No skills found, but continuing with empty skills array");
       }
       setResumeData(data);
       // Generate initial skill scores for chart
